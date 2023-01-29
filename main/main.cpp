@@ -18,10 +18,10 @@ using namespace std::literals;
 std::atomic<int> keep_unlocked{0}, trust_agents{0};
 
 constexpr int TOUCH_THRESHOLD = 800;
-constexpr int TOUCH_PIN     = GPIO_NUM_0;
-constexpr int RED_LED_PIN   = GPIO_NUM_30;
-constexpr int GREEN_LED_PIN = GPIO_NUM_31;
-constexpr int SOLENOID_PIN  = GPIO_NUM_32;
+constexpr int TOUCH_PIN     = GPIO_NUM_32;
+constexpr int RED_LED_PIN   = GPIO_NUM_25;
+constexpr int GREEN_LED_PIN = GPIO_NUM_26;
+constexpr int SOLENOID_PIN  = GPIO_NUM_27;
 
 void success_feedback()
 {
