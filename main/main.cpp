@@ -3,6 +3,9 @@
 #include <cstddef>
 #include <cstdint>
 
+#define LOG_LEVEL log::level::debug
+#include <log.hpp>
+
 extern "C"
 {
     void app_main();
@@ -11,17 +14,19 @@ extern "C"
     #include <esp_wifi_types.h>
     #include <driver/gpio.h>
     #include <driver/touch_pad.h>
+    #include <esp_log.h>
+    #include <nvs_flash.h>
 }
 
 using namespace std::literals;
-#define TRY(...) ESP_ERROR_CHECK(__va_args__)
+#define TRY(...) ESP_ERROR_CHECK(__VA_ARGS__)
 std::atomic<int> keep_unlocked{0}, trust_agents{0};
 
-constexpr int TOUCH_THRESHOLD = 800;
-constexpr int TOUCH_PIN     = GPIO_NUM_32;
-constexpr int RED_LED_PIN   = GPIO_NUM_25;
-constexpr int GREEN_LED_PIN = GPIO_NUM_26;
-constexpr int SOLENOID_PIN  = GPIO_NUM_27;
+constexpr auto TOUCH_THRESHOLD = 800;
+constexpr auto TOUCH_PIN     = TOUCH_PAD_NUM9;
+constexpr auto RED_LED_PIN   = GPIO_NUM_25;
+constexpr auto GREEN_LED_PIN = GPIO_NUM_26;
+constexpr auto SOLENOID_PIN  = GPIO_NUM_17;
 
 void success_feedback()
 {
@@ -82,17 +87,17 @@ void on_unlock_signal()
 void on_sta_connect(void*, esp_event_base_t, int32_t, void* event_data)
 {
     ++trust_agents;
-    uint8_t* mac = &((wifi_event_ap_staconnected_t*)event_data)->mac;
-    ESP_LOGI("Trust Agent %02x:%02x:%02x:%02x:%02x:%02x Connected, Total: %d",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], trust_agents);
+    auto mac = ((wifi_event_ap_staconnected_t*)event_data)->mac;
+    log::info("Trust Agent %02x:%02x:%02x:%02x:%02x:%02x Connected, Total: %d",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], trust_agents.load());
 }
 
 void on_sta_disconnect(void*, esp_event_base_t, int32_t, void* event_data) 
 {
     --trust_agents;
-    uint8_t* mac = &((wifi_event_ap_staconnected_t*)event_data)->mac;
-    ESP_LOGI("Trust Agent %02x:%02x:%02x:%02x:%02x:%02x Disconnected, Total: %d",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], trust_agents);
+    auto mac = ((wifi_event_ap_staconnected_t*)event_data)->mac;
+    log::info("Trust Agent %02x:%02x:%02x:%02x:%02x:%02x Disconnected, Total: %d",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], trust_agents.load());
 }
 
 void app_main()
@@ -119,18 +124,18 @@ void app_main()
     wifi_init_config_t wifi_cfg = WIFI_INIT_CONFIG_DEFAULT();
     
     wifi_config_t wifi_ap_cfg
-    {
-        .ap.ssid = "E-Yantra LAB",
-        .ap.password = "no_JUGAAD_4u",
-        .ap.authmode = WIFI_AUTH_WPA2_PSK,
-        .ap.max_connections = ESP_WIFI_MAX_CONN_NUM,
-    };
+    {.ap{
+        .ssid = "E-Yantra LAB",
+        .password = "no_JUGAAD_4u",
+        .authmode = WIFI_AUTH_WPA2_PSK,
+        .max_connection = ESP_WIFI_MAX_CONN_NUM,
+    }};
     
     wifi_config_t wifi_sta_cfg
-    {
-        .sta.ssid = "PU@CAMPUS",
-        .sta.password = "1234567890",
-    };
+    {.sta{
+        .ssid = "PU@CAMPUS",
+        .password = "1234567890",
+    }};
     
     /////////////////////////////////////////////
     
@@ -142,6 +147,7 @@ void app_main()
     TRY(esp_wifi_start());
     TRY(esp_wifi_connect());
     
+    TRY(esp_event_loop_create_default());
     TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &on_sta_connect, NULL));
     TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &on_sta_disconnect, NULL));
     
@@ -156,11 +162,11 @@ void app_main()
     
     while(1)
     {
-        touch_pad_read_raw_data(i, &touch_value);
-        touch_pad_read_filtered(i, &filtered_touch_value);
-        ESP_LOGI("Raw: %4d, Filtered: %4d\n", i, touch_value, filtered_touch_value);
+        touch_pad_read_raw_data(TOUCH_PIN, &touch_value);
+        touch_pad_read_filtered(TOUCH_PIN, &filtered_touch_value);
+        log::debug("Raw: %4d, Filtered: %4d\n", touch_value, filtered_touch_value);
         
-        if (filtered_touch_value > touch_threshold)
+        if (filtered_touch_value > TOUCH_THRESHOLD)
             on_unlock_signal();
     }
 }
