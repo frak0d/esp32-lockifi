@@ -19,28 +19,28 @@ constexpr auto loglevel = log::level(LOG_LEVEL);
 inline void
 debug(const char* fmt, auto... args) noexcept
 {
-    if constexpr (loglevel <= level::debug)
+    if constexpr (loglevel >= level::debug)
         std::printf(fmt, args...);
 }
 
 inline void
 info(const char* fmt, auto... args) noexcept
 {
-    if constexpr (loglevel <= level::info)
+    if constexpr (loglevel >= level::info)
         std::printf(fmt, args...);
 }
 
 inline void
 warn(const char* fmt, auto... args) noexcept
 {
-    if constexpr (loglevel <= level::warn)
+    if constexpr (loglevel >= level::warn)
         std::printf(fmt, args...);
 }
 
 inline void
 error(const char* fmt, auto... args) noexcept
 {
-    if constexpr (loglevel <= level::error)
+    if constexpr (loglevel >= level::error)
         std::printf(fmt, args...);
 }
 
