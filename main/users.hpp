@@ -62,13 +62,14 @@ class user_manager_t
 			{
 				FILE* userfile = fopen(filename, "w");
 				
-				if (!userfile)
-					log::error("Unable to Open %s\n", filename);
-				else
+				if (userfile)
+				{
 					for (const auto& [mac, username] : user_dict)
 						fprintf(userfile, "%lx %s\n", mac, username.c_str());
-				
-				fclose(userfile);
+					
+					fclose(userfile);
+				}
+				else log::error("Unable to Open %s\n", filename);
 			}
 			std::this_thread::sleep_for(500ms);
 		}
@@ -78,26 +79,25 @@ public:
 	
 	bool init(const char* fs_path)
 	{
-		puts("here1");
 		filename = fs_path;
 		std::thread(&user_manager_t::userfile_update_loop, this).detach();
-		FILE* userfile = fopen(filename, "w");
+		FILE* userfile = fopen(filename, "r");
 		
-		if (!userfile)
-		{
-			puts("here2");
-			log::error("Unable to Open %s\n", filename);
-			return false;
-		}
-		else
+		if (userfile)
 		{
 			mac_address mac;
-			char username[128] = "";
-			puts("heeeere");
-			while (2 == fscanf(userfile, "%lx %s\n", &mac, username))
+			char username[128]{};
+			
+			while (2 == fscanf(userfile, "%lx %[^\n]", &mac, username))
 				user_dict[mac] = username;
 			
 			fclose(userfile);
+			return true;
+		}
+		else
+		{
+			log::warn("Skipping Database Loading... Missing File\n");
+			return false;
 		}
 	}
 	
