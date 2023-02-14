@@ -15,39 +15,6 @@
 
 using namespace std::literals;
 
-class access_logger_t
-{
-	FILE* logfile;
-	
-public:
-	
-	bool init(const char* fs_path)
-	{
-		logfile = std::fopen(fs_path, "ab+");
-		return logfile;
-	}
-	
-	auto read_logs()
-	{
-		std::vector<std::pair<unix_timestamp, mac_address>> access_logs;
-		
-		//parse file here
-		
-		return access_logs;
-	}
-	
-	void add_log(mac_address mac)
-	{
-		unix_timestamp time;
-		//time = get network time()
-		std::fwrite(&time, sizeof(unix_timestamp), 1, logfile);
-		std::fwrite(&mac, sizeof(mac_address), 1, logfile);
-	}
-	
-} access_logger;
-
-///////////////////////////////////////////////////////////////////////////////
-
 class user_manager_t
 {
 	bool list_updated = false;
@@ -65,7 +32,7 @@ class user_manager_t
 				if (userfile)
 				{
 					for (const auto& [mac, username] : user_dict)
-						fprintf(userfile, "%lx %s\n", mac, username.c_str());
+						fprintf(userfile, "%llx %s\n", mac, username.c_str());
 					
 					fclose(userfile);
 				}
@@ -88,7 +55,7 @@ public:
 			mac_address mac;
 			char username[128]{};
 			
-			while (2 == fscanf(userfile, "%lx %[^\n]", &mac, username))
+			while (2 == fscanf(userfile, "%llx %[^\n]", &mac, username))
 				user_dict[mac] = username;
 			
 			fclose(userfile);
@@ -99,6 +66,12 @@ public:
 			log::warn("Skipping Database Loading... Missing File\n");
 			return false;
 		}
+	}
+	
+	void load_defaults()
+	{
+		// just in case filesystem gets currupted
+		user_dict[0xCAFEBABEB00B] = "Admin";
 	}
 	
 	void add_user(const mac_address mac, const std::string& username)
@@ -128,3 +101,36 @@ public:
 	}
 	
 } user_manager;
+
+///////////////////////////////////////////////////////////////////////////////
+
+class access_logger_t
+{
+	FILE* logfile;
+	
+public:
+	
+	bool init(const char* fs_path)
+	{
+		logfile = std::fopen(fs_path, "ab+");
+		return logfile;
+	}
+	
+	auto read_logs()
+	{
+		std::vector<std::pair<unix_timestamp, mac_address>> access_logs;
+		
+		//parse file here
+		
+		return access_logs;
+	}
+	
+	void add_log(mac_address mac, bool connected)
+	{
+		//unix_timestamp time;
+		//time = get network time()
+		//std::fwrite(&time, sizeof(unix_timestamp), 1, logfile);
+		//std::fwrite(&mac, sizeof(mac_address), 1, logfile);
+	}
+	
+} access_logger;

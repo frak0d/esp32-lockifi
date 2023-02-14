@@ -1,10 +1,13 @@
+#include <bit>
 #include <atomic>
 #include <thread>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #define LOG_LEVEL log::level::debug
-#include <log.hpp>
+#include "log.hpp"
+#include "users.hpp"
 
 extern "C"
 {
@@ -86,18 +89,46 @@ void on_unlock_signal()
 
 void on_sta_connect(void*, esp_event_base_t, int32_t, void* event_data)
 {
-    ++trust_agents;
-    auto mac = ((wifi_event_ap_staconnected_t*)event_data)->mac;
-    log::info("Trust Agent %02x:%02x:%02x:%02x:%02x:%02x Connected, Total: %d",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], trust_agents.load());
+    auto& mac_arr = ((wifi_event_ap_staconnected_t*)event_data)->mac;
+    
+    uint8_t mac_buf[8]{};
+	std::memcpy(mac_buf, mac_arr, sizeof(mac_arr));
+	auto mac = std::bit_cast<mac_address>(mac_buf);
+    access_logger.add_log(mac, true);
+    
+    if (user_manager.check_user(mac))
+    {
+        ++trust_agents;
+        log::info("Trusted Agent %s Connected, Total: %d\n",
+             mac2str(mac).c_str(), trust_agents.load());
+    }
+    else
+    {
+        log::warn("Unknown Agent %s Connected, Ignoring...\n",
+             mac2str(mac).c_str(), trust_agents.load());
+    }
 }
 
 void on_sta_disconnect(void*, esp_event_base_t, int32_t, void* event_data) 
 {
-    --trust_agents;
-    auto mac = ((wifi_event_ap_staconnected_t*)event_data)->mac;
-    log::info("Trust Agent %02x:%02x:%02x:%02x:%02x:%02x Disconnected, Total: %d",
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], trust_agents.load());
+    auto& mac_arr = ((wifi_event_ap_staconnected_t*)event_data)->mac;
+    
+    uint8_t mac_buf[8]{};
+	std::memcpy(mac_buf, mac_arr, sizeof(mac_arr));
+	auto mac = std::bit_cast<mac_address>(mac_buf);
+    access_logger.add_log(mac, false);
+    
+    if (user_manager.check_user(mac))
+    {
+        --trust_agents;
+        log::info("Trusted Agent %s Disconnected, Total: %d\n",
+             mac2str(mac).c_str(), trust_agents.load());
+    }
+    else
+    {
+        log::warn("Unknown Agent %s Disconnected, Ignoring...\n",
+             mac2str(mac).c_str(), trust_agents.load());
+    }
 }
 
 void app_main()
@@ -107,6 +138,13 @@ void app_main()
     
     gpio_set_direction(RED_LED_PIN, GPIO_MODE_OUTPUT);
     gpio_set_direction(GREEN_LED_PIN, GPIO_MODE_OUTPUT);
+    
+    /////////////////////////////////////////////
+    
+    if(!user_manager.init("/lfs/user_list"))
+        user_manager.load_defaults(); else;
+    
+	access_logger.init("/lfs/access_logs");
     
     /////////////////////////////////////////////
     

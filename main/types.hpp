@@ -12,7 +12,7 @@ std::string mac2str(mac_address mac)
 {
 	char buf[20]{};
 	std::string mac_str;
-	std::snprintf(buf, sizeof(buf), "%012lx", mac);
+	std::snprintf(buf, sizeof(buf), "%012llx", mac);
 	
 	for (int i=1 ; i < 12 ; i+=2)
 	{
@@ -40,6 +40,6 @@ mac_address str2mac(const std::string& str)
 		else s = 2;
 	}
 	
-	std::sscanf(buf.c_str(), "%012lx", &mac);
+	std::sscanf(buf.c_str(), "%012llx", &mac);
 	return mac;
 }
