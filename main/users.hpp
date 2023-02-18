@@ -46,6 +46,7 @@ public:
 	
 	bool init(const char* fs_path)
 	{
+		load_defaults();
 		filename = fs_path;
 		std::thread(&user_manager_t::userfile_update_loop, this).detach();
 		FILE* userfile = fopen(filename, "r");
@@ -71,7 +72,8 @@ public:
 	void load_defaults()
 	{
 		// just in case filesystem gets currupted
-		user_dict[0xCAFEBABEB00B] = "Admin";
+		user_dict[0xCAFEBABEB00B] = "Admin Phone";
+		user_dict[0x1EA7DEADBEEF] = "Admin Laptop";
 	}
 	
 	void add_user(const mac_address mac, const std::string& username)

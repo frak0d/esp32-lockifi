@@ -4,10 +4,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
 
-#define LOG_LEVEL log::level::debug
+#define LOG_LEVEL log::level::info
+
 #include "log.hpp"
 #include "users.hpp"
+#include "api.hpp"
 
 extern "C"
 {
@@ -19,17 +22,18 @@ extern "C"
     #include <driver/touch_pad.h>
     #include <esp_log.h>
     #include <nvs_flash.h>
+    #include <lwip/ip.h>
 }
 
 using namespace std::literals;
 #define TRY(...) ESP_ERROR_CHECK(__VA_ARGS__)
 std::atomic<int> keep_unlocked{0}, trust_agents{0};
 
-constexpr auto TOUCH_THRESHOLD = 800;
+constexpr auto TOUCH_THRESHOLD = 1000;
 constexpr auto TOUCH_PIN     = TOUCH_PAD_NUM9;
 constexpr auto RED_LED_PIN   = GPIO_NUM_25;
 constexpr auto GREEN_LED_PIN = GPIO_NUM_26;
-constexpr auto SOLENOID_PIN  = GPIO_NUM_17;
+constexpr auto SOLENOID_PIN  = GPIO_NUM_2;//GPIO_NUM_17;
 
 void success_feedback()
 {
@@ -79,28 +83,39 @@ void door_wardern(gpio_num_t pin)
 
 void on_unlock_signal()
 {
+    log::info("TOUCH RECIEVED\n");
     if (trust_agents > 0)
     {
-        keep_unlocked += 5000;
+        keep_unlocked = 5000;
         success_feedback();
     }
     else faliure_feedback();
 }
 
-void on_sta_connect(void*, esp_event_base_t, int32_t, void* event_data)
+constexpr auto LE_arr2mac(const uint8_t* mac_arr)
 {
-    auto& mac_arr = ((wifi_event_ap_staconnected_t*)event_data)->mac;
-    
     uint8_t mac_buf[8]{};
-	std::memcpy(mac_buf, mac_arr, sizeof(mac_arr));
-	auto mac = std::bit_cast<mac_address>(mac_buf);
+    std::copy(mac_arr, mac_arr+6, mac_buf);
+	return std::bit_cast<mac_address>(mac_buf);
+}
+
+constexpr auto BE_arr2mac(const uint8_t* mac_arr)
+{
+    uint8_t mac_buf[8]{};
+    std::reverse_copy(mac_arr, mac_arr+6, mac_buf);
+	return std::bit_cast<mac_address>(mac_buf);
+}
+
+void on_client_connect(void*, esp_event_base_t, int32_t, void* event_data)
+{
+    auto mac = BE_arr2mac(((wifi_event_ap_staconnected_t*)event_data)->mac);
     access_logger.add_log(mac, true);
     
     if (user_manager.check_user(mac))
     {
         ++trust_agents;
-        log::info("Trusted Agent %s Connected, Total: %d\n",
-             mac2str(mac).c_str(), trust_agents.load());
+        log::info("Trusted Agent %s (%s) Connected, Total: %d\n",
+             mac2str(mac).c_str(), user_manager.get_username(mac).c_str(), trust_agents.load());
     }
     else
     {
@@ -109,20 +124,16 @@ void on_sta_connect(void*, esp_event_base_t, int32_t, void* event_data)
     }
 }
 
-void on_sta_disconnect(void*, esp_event_base_t, int32_t, void* event_data) 
+void on_client_disconnect(void*, esp_event_base_t, int32_t, void* event_data) 
 {
-    auto& mac_arr = ((wifi_event_ap_staconnected_t*)event_data)->mac;
-    
-    uint8_t mac_buf[8]{};
-	std::memcpy(mac_buf, mac_arr, sizeof(mac_arr));
-	auto mac = std::bit_cast<mac_address>(mac_buf);
+    auto mac = BE_arr2mac(((wifi_event_ap_staconnected_t*)event_data)->mac);
     access_logger.add_log(mac, false);
     
     if (user_manager.check_user(mac))
     {
         --trust_agents;
-        log::info("Trusted Agent %s Disconnected, Total: %d\n",
-             mac2str(mac).c_str(), trust_agents.load());
+        log::info("Trusted Agent %s (%s) Disconnected, Total: %d\n",
+             mac2str(mac).c_str(), user_manager.get_username(mac).c_str(), trust_agents.load());
     }
     else
     {
@@ -133,11 +144,12 @@ void on_sta_disconnect(void*, esp_event_base_t, int32_t, void* event_data)
 
 void app_main()
 {
+    TRY(esp_event_loop_create_default());
     esp_log_level_set("wifi", ESP_LOG_WARN);
     std::thread(door_wardern, SOLENOID_PIN).detach();
     
-    gpio_set_direction(RED_LED_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_direction(GREEN_LED_PIN, GPIO_MODE_OUTPUT);
+    TRY(gpio_set_direction(RED_LED_PIN, GPIO_MODE_OUTPUT));
+    TRY(gpio_set_direction(GREEN_LED_PIN, GPIO_MODE_OUTPUT));
     
     /////////////////////////////////////////////
     
@@ -177,34 +189,60 @@ void app_main()
     
     /////////////////////////////////////////////
     
-    TRY(esp_wifi_init(&wifi_cfg));
-    TRY(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    TRY(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-    TRY(esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_cfg));
-    TRY(esp_wifi_set_config(WIFI_IF_STA, &wifi_sta_cfg));
-    TRY(esp_wifi_start());
-    TRY(esp_wifi_connect());
+    TRY(esp_netif_init());
+    auto wifiAP = esp_netif_create_default_wifi_ap();
+    //auto wifiSTA = esp_netif_create_default_wifi_sta();
+    TRY(esp_netif_dhcps_start(wifiAP));
     
-    TRY(esp_event_loop_create_default());
-    TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &on_sta_connect, NULL));
-    TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &on_sta_disconnect, NULL));
+    esp_netif_dns_info_t cloudflare_dns, google_dns, open_dns;
+    IP4_ADDR(&google_dns.ip.u_addr.ip4, 8,8,8,8);
+    IP4_ADDR(&cloudflare_dns.ip.u_addr.ip4, 1,1,1,1);
+    IP4_ADDR(&open_dns.ip.u_addr.ip4, 208,67,222,222);
+    
+    TRY(esp_netif_set_dns_info(wifiAP, ESP_NETIF_DNS_MAIN, &cloudflare_dns));
+    //TRY(esp_netif_set_dns_info(wifiAP, ESP_NETIF_DNS_BACKUP, &open_dns));
+    //TRY(esp_netif_set_dns_info(wifiAP, ESP_NETIF_DNS_FALLBACK, &google_dns));
+    
+    TRY(esp_wifi_init(&wifi_cfg));
+    TRY(esp_wifi_set_mode(WIFI_MODE_AP));
+    //TRY(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+    TRY(esp_wifi_set_config(WIFI_IF_AP, &wifi_ap_cfg));
+    //TRY(esp_wifi_set_config(WIFI_IF_STA, &wifi_sta_cfg));
+    TRY(esp_wifi_start());
+    //TRY(esp_wifi_connect());
+    
+    TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED, &on_client_connect, NULL));
+    TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, &on_client_disconnect, NULL));
+    
+    /////////////////////////////////////////////
+    
+    httpd_handle_t http_server;
+    httpd_config_t httpd_config = HTTPD_DEFAULT_CONFIG();
+    
+    TRY(httpd_start(&http_server, &httpd_config));
+    TRY(httpd_register_uri_handler(http_server, &Api::ping));
+    TRY(httpd_register_uri_handler(http_server, &Api::access_logs));
+    TRY(httpd_register_uri_handler(http_server, &Api::user_list));
+    TRY(httpd_register_uri_handler(http_server, &Api::add_user));
+    TRY(httpd_register_uri_handler(http_server, &Api::remove_user));
+    TRY(httpd_register_uri_handler(http_server, &Api::check_user));
     
     /////////////////////////////////////////////
     
     TRY(touch_pad_init());
-    TRY(touch_pad_set_voltage(TOUCH_HVOLT_2V7, TOUCH_LVOLT_0V5, TOUCH_HVOLT_ATTEN_1V));
+    TRY(touch_pad_set_voltage(TOUCH_HVOLT_2V7, TOUCH_LVOLT_0V7, TOUCH_HVOLT_ATTEN_1V5));
     TRY(touch_pad_config(TOUCH_PIN, 0));
     TRY(touch_pad_filter_start(10/*ms*/));
     
-    uint16_t touch_value, filtered_touch_value;
+    uint16_t touch_value;
     
     while(1)
     {
-        touch_pad_read_raw_data(TOUCH_PIN, &touch_value);
-        touch_pad_read_filtered(TOUCH_PIN, &filtered_touch_value);
-        log::debug("Raw: %4d, Filtered: %4d\n", touch_value, filtered_touch_value);
+        std::this_thread::sleep_for(200ms);
+        touch_pad_read_filtered(TOUCH_PIN, &touch_value);
+        log::debug("Touch Value: %4d\n", touch_value);
         
-        if (filtered_touch_value > TOUCH_THRESHOLD)
+        if (touch_value < TOUCH_THRESHOLD)
             on_unlock_signal();
     }
 }
