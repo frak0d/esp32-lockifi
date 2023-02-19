@@ -1,82 +1,156 @@
 #pragma once
 
-extern "C"
-{
-    #include <esp_err.h>
-    #include <esp_http_server.h>
-}
+#include "users.hpp"
+
+#include <cstdio>
+#include <esp_err.h>
+#include <esp_http_server.h>
+#include <lwip/inet.h>
+#include <lwip/sockets.h>
 
 namespace Api
 {
 
-esp_err_t get_example(httpd_req_t *req)
+bool check_admin(httpd_req_t* req)
 {
-    /* Send a simple response */
-    const char resp[] = "URI GET Response";
-    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
+    int sockfd = httpd_req_to_sockfd(req);
+    
+    char ipstr[INET_ADDRSTRLEN];
+    sockaddr_in6 addr;
+    socklen_t addr_size = sizeof(addr);
+    
+    if (getpeername(sockfd, (sockaddr*)&addr, &addr_size) < 0)
+    {
+        log::info("Error getting client IP\n");
+        return false;
+    }
+    
+    inet_ntop(AF_INET, &addr.sin6_addr.un.u32_addr[3], ipstr, sizeof(ipstr));
+    log::info("Client IP => %s\n", ipstr);
+    
+    //if (ip corresponds to any connected admin mac)
+        return true;
+    //else
+    //    return false;
 }
 
-esp_err_t post_example(httpd_req_t *req)
+bool get_content(httpd_req_t* req, std::string& dst_buf, size_t max_len)
 {
-    /* Destination buffer for content of HTTP POST request.
-     * httpd_req_recv() accepts char* only, but content could
-     * as well be any binary data (needs type casting).
-     * In case of string data, null termination will be absent, and
-     * content length would give length of string */
-    char content[100];
-
-    /* Truncate if content length larger than the buffer */
-    size_t recv_size = 5;//MIN(req->content_len, sizeof(content));
-
-    int ret = httpd_req_recv(req, content, recv_size);
-    if (ret <= 0) {  /* 0 return value indicates connection closed */
-        /* Check if timeout occurred */
-        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
-            /* In case of timeout one can choose to retry calling
-             * httpd_req_recv(), but to keep it simple, here we
-             * respond with an HTTP 408 (Request Timeout) error */
-            httpd_resp_send_408(req);
-        }
-        /* In case of error, returning ESP_FAIL will
-         * ensure that the underlying socket is closed */
-        return ESP_FAIL;
+    dst_buf.resize(max_len);
+    log::debug("Content Length: %llx\n", req->content_len);
+    //if (req->content_len > dst_buf.size())
+    //    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "content length too long");
+    
+    auto ret = httpd_req_recv(req, dst_buf.data(), max_len);
+    
+    if (ret > 0)
+    {
+        dst_buf.resize(ret);
+        httpd_resp_send(req, nullptr, 0);
+        return true;
     }
-
-    /* Send a simple response */
-    const char resp[] = "URI POST Response";
-    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
+    else
+    {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT)
+            httpd_resp_send_408(req);
+        else
+            httpd_resp_send_500(req);
+        
+        return false;
+    }
 }
 
 esp_err_t ping_fn(httpd_req_t* req)
 {
-    return httpd_resp_send(req, "UwU", HTTPD_RESP_USE_STRLEN);
+    if (!check_admin(req)) return 0;
+    
+    return httpd_resp_send(req, "UwU", 3);
 }
 
 esp_err_t access_logs_fn(httpd_req_t* req)
 {
+    if (!check_admin(req)) return 0;
+    
+    auto logfile = access_logger.get_file_ptr();
+    
+    size_t sz{};
+    uint8_t buf[512]{};
+    
+    while(1)
+    {
+        //sz = std::fread();
+    }
+    
     return ESP_OK;
 }
 
 esp_err_t user_list_fn(httpd_req_t* req)
 {
-    return ESP_OK;
+    if (!check_admin(req)) return 0;
+    
+    esp_err_t ret;
+    auto& user_dict = user_manager.get_user_dict();
+    
+    for (const auto& [mac,name] : user_dict)
+    {
+        auto buf = mac2str(mac);
+        buf += ' '; buf += name; buf += '\n';
+        ret = httpd_resp_send_chunk(req, buf.data(), buf.size());
+        if (ret != ESP_OK) return ret;
+    }
+    return httpd_resp_send_chunk(req, nullptr, 0);
 }
 
 esp_err_t add_user_fn(httpd_req_t* req)
 {
-    return ESP_OK;
+    if (!check_admin(req)) return 0;
+    
+    std::string content;
+    
+    if (!get_content(req, content, 128))
+        return ESP_FAIL;
+    
+    auto name = content.substr(18);
+    auto  mac = str2mac(content.substr(0, 17));
+    user_manager.add_user(mac, name);
+    
+    return httpd_resp_send(req, "OK", 2);
 }
 
 esp_err_t remove_user_fn(httpd_req_t* req)
 {
-    return ESP_OK;
+    if (!check_admin(req)) return 0;
+    
+    std::string content;
+    
+    if (!get_content(req, content, 17))
+        return ESP_FAIL;
+    
+    auto mac = str2mac(content);
+    
+    if (user_manager.check_user(mac))
+    {
+        user_manager.remove_user(mac);
+        return httpd_resp_send(req, "OK", 2);
+    }
+    else return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "User Not Found");
 }
 
 esp_err_t check_user_fn(httpd_req_t* req)
 {
-    return ESP_OK;
+    if (!check_admin(req)) return 0;
+    
+    std::string content;
+    
+    if (!get_content(req, content, 17))
+        return ESP_FAIL;
+    
+    auto mac = str2mac(content);
+    
+    if (user_manager.check_user(mac))
+        return httpd_resp_send(req, user_manager.get_username(mac).c_str(), -1);
+    else
+        return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "User Not Found");
 }
 
 /////////////////////////////////////////////
@@ -85,7 +159,7 @@ httpd_uri_t ping
 {
     .uri      = "/ping",
     .method   = HTTP_GET,
-    .handler  = Api::ping_fn
+    .handler  = ping_fn
 };
 httpd_uri_t access_logs
 {
