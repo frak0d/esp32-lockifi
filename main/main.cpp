@@ -12,18 +12,16 @@
 #include "users.hpp"
 #include "api.hpp"
 
-extern "C"
-{
-    void app_main();
-    
-    #include <esp_wifi.h>
-    #include <esp_wifi_types.h>
-    #include <driver/gpio.h>
-    #include <driver/touch_pad.h>
-    #include <esp_log.h>
-    #include <nvs_flash.h>
-    #include <lwip/ip.h>
-}
+#include <esp_wifi.h>
+#include <esp_wifi_types.h>
+#include <driver/gpio.h>
+#include <driver/touch_pad.h>
+#include <esp_log.h>
+#include <nvs_flash.h>
+#include <lwip/ip.h>
+#include <esp_err.h>
+#include <esp_flash.h>
+#include <esp_littlefs.h>
 
 using namespace std::literals;
 #define TRY(...) ESP_ERROR_CHECK(__VA_ARGS__)
@@ -96,14 +94,14 @@ constexpr auto LE_arr2mac(const uint8_t* mac_arr)
 {
     uint8_t mac_buf[8]{};
     std::copy(mac_arr, mac_arr+6, mac_buf);
-	return std::bit_cast<mac_address>(mac_buf);
+    return std::bit_cast<mac_address>(mac_buf);
 }
 
 constexpr auto BE_arr2mac(const uint8_t* mac_arr)
 {
     uint8_t mac_buf[8]{};
     std::reverse_copy(mac_arr, mac_arr+6, mac_buf);
-	return std::bit_cast<mac_address>(mac_buf);
+    return std::bit_cast<mac_address>(mac_buf);
 }
 
 void on_client_connect(void*, esp_event_base_t, int32_t, void* event_data)
@@ -142,6 +140,7 @@ void on_client_disconnect(void*, esp_event_base_t, int32_t, void* event_data)
     }
 }
 
+extern "C"
 void app_main()
 {
     TRY(esp_event_loop_create_default());
@@ -153,10 +152,30 @@ void app_main()
     
     /////////////////////////////////////////////
     
-    if(!user_manager.init("/lfs/user_list"))
-        user_manager.load_defaults(); else;
+    esp_vfs_littlefs_conf_t lfs_config
+    {
+        .base_path = "/lfs",
+        .partition_label = "littlefs",
+        .format_if_mount_failed = true
+    };
     
-	access_logger.init("/lfs/access_logs");
+    TRY(esp_vfs_littlefs_register(&lfs_config));
+    
+    // print filesystem info
+    {
+        size_t total, used = 0;
+        auto ret = esp_littlefs_info(lfs_config.partition_label, &total, &used);
+        
+        if (ret != ESP_OK)
+            log::warn("Failed to get LittleFS partition information (%s)", esp_err_to_name(ret));
+        else
+            log::info("Partition size: total: %lld, used: %lld", total, used);
+    }
+    
+    if(!user_manager.init("/lfs/user_list"))
+        {user_manager.load_defaults();}
+    
+    access_logger.init("/lfs/access_logs");
     
     /////////////////////////////////////////////
     
