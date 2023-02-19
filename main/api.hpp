@@ -2,7 +2,7 @@
 
 #include "users.hpp"
 
-#include <cstdio>
+#include <stdio.h>
 #include <esp_err.h>
 #include <esp_http_server.h>
 #include <lwip/inet.h>
@@ -26,7 +26,7 @@ bool check_admin(httpd_req_t* req)
     }
     
     inet_ntop(AF_INET, &addr.sin6_addr.un.u32_addr[3], ipstr, sizeof(ipstr));
-    log::info("Client IP => %s\n", ipstr);
+    log::info("Client IP %s\n", ipstr);
     
     //if (ip corresponds to any connected admin mac)
         return true;
@@ -71,17 +71,39 @@ esp_err_t access_logs_fn(httpd_req_t* req)
 {
     if (!check_admin(req)) return 0;
     
-    auto logfile = access_logger.get_file_ptr();
+    auto logfile = fopen("/lfs/access_logs", "rb");
+    if (!logfile)
+    {
+        log::error("access_log_fn: unable to open logfile\n");
+        return httpd_resp_send_500(req);
+    }
     
     size_t sz{};
-    uint8_t buf[512]{};
+    char buf[512]{};
+    esp_err_t ret;
     
     while(1)
     {
-        //sz = std::fread();
+        sz = fread(buf, 1, sizeof(buf), logfile);
+        
+        if (sz < sizeof(buf))
+        {
+            if (feof(logfile))
+            {
+                if (httpd_resp_send_chunk(req, buf, sz) != ESP_OK) goto on_error;
+                break; //file finished
+            }
+            else goto on_error;
+        }
+        else if (httpd_resp_send_chunk(req, buf, sz) != ESP_OK) goto on_error;
     }
     
+    fclose(logfile);
     return ESP_OK;
+    
+on_error:
+    fclose(logfile);
+    return httpd_resp_send_500(req);
 }
 
 esp_err_t user_list_fn(httpd_req_t* req)
@@ -148,7 +170,7 @@ esp_err_t check_user_fn(httpd_req_t* req)
     auto mac = str2mac(content);
     
     if (user_manager.check_user(mac))
-        return httpd_resp_send(req, user_manager.get_username(mac).c_str(), -1);
+        return httpd_resp_sendstr(req, user_manager.get_username(mac).c_str());
     else
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "User Not Found");
 }

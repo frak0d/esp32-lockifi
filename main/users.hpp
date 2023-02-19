@@ -92,9 +92,9 @@ public:
     void remove_user(const mac_address mac)
     {
         list_updated = true;
-        user_dict.erase(mac);
         log::info("Removed '%s' with mac %s\n",
              user_dict.at(mac).c_str(), mac2str(mac).c_str());
+        user_dict.erase(mac);
     }
     
     bool check_user(const mac_address mac)

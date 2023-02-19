@@ -167,9 +167,9 @@ void app_main()
         auto ret = esp_littlefs_info(lfs_config.partition_label, &total, &used);
         
         if (ret != ESP_OK)
-            log::warn("Failed to get LittleFS partition information (%s)", esp_err_to_name(ret));
+            log::warn("Failed to get LittleFS partition information (%s)\n", esp_err_to_name(ret));
         else
-            log::info("Partition size: total: %lld, used: %lld", total, used);
+            log::info("Partition used/total: %zu/%zu\n", used, total);
     }
     
     if(!user_manager.init("/lfs/user_list"))
