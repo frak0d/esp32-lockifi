@@ -3,5 +3,5 @@
 
 nvs,      data, nvs,      0x9000,  24K,
 phy_init, data, phy,            ,  4K,
-factory,  app,  factory,        ,  1600K,
-littlefs, data, spiffs,         ,  1M,
+factory,  app,  factory,        ,  1800K,
+littlefs, data, spiffs,         ,  2M,

@@ -28,7 +28,7 @@ bool check_admin(httpd_req_t* req)
     inet_ntop(AF_INET, &addr.sin6_addr.un.u32_addr[3], ipstr, sizeof(ipstr));
     log::info("Client IP %s\n", ipstr);
     
-    //if (ip corresponds to any connected admin mac)
+    //if (admin_list.contains())
         return true;
     //else
     //    return false;
@@ -99,7 +99,7 @@ esp_err_t access_logs_fn(httpd_req_t* req)
     }
     
     fclose(logfile);
-    return ESP_OK;
+    return httpd_resp_send_chunk(req, nullptr, 0);;
     
 on_error:
     fclose(logfile);
