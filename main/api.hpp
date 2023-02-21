@@ -13,11 +13,9 @@ namespace Api
 
 bool check_admin(httpd_req_t* req)
 {
-    int sockfd = httpd_req_to_sockfd(req);
-    
-    char ipstr[INET_ADDRSTRLEN];
     sockaddr_in6 addr;
     socklen_t addr_size = sizeof(addr);
+    int sockfd = httpd_req_to_sockfd(req);
     
     if (getpeername(sockfd, (sockaddr*)&addr, &addr_size) < 0)
     {
@@ -25,13 +23,26 @@ bool check_admin(httpd_req_t* req)
         return false;
     }
     
-    inet_ntop(AF_INET, &addr.sin6_addr.un.u32_addr[3], ipstr, sizeof(ipstr));
-    log::info("Client IP %s\n", ipstr);
+    // last 32 bits of ipv6 should gives us ipv4
+    auto ip4 = addr.sin6_addr.un.u32_addr[3];
+    auto mac = online_clients.at(ip4);
     
-    //if (admin_list.contains())
+    if (admin_list.contains(mac))
+    {
+        if (user_manager.check_user(mac))
+            log::info("API Access Granted to %s (%s)\n", mac2str(mac).c_str(), user_manager.get_username(mac).c_str());
+        else
+            log::info("API Access Granted to %s (UNKNOWN)\n", mac2str(mac).c_str());
         return true;
-    //else
-    //    return false;
+    }
+    else
+    {
+        if (user_manager.check_user(mac))
+            log::info("API Access Denied to %s (%s)\n", mac2str(mac).c_str(), user_manager.get_username(mac).c_str());
+        else
+            log::info("API Access Denied to %s (UNKNOWN)\n", mac2str(mac).c_str());
+        return false;
+    }
 }
 
 bool get_content(httpd_req_t* req, std::string& dst_buf, size_t max_len)
@@ -62,14 +73,13 @@ bool get_content(httpd_req_t* req, std::string& dst_buf, size_t max_len)
 
 esp_err_t ping_fn(httpd_req_t* req)
 {
-    if (!check_admin(req)) return 0;
-    
     return httpd_resp_send(req, "UwU", 3);
 }
 
 esp_err_t access_logs_fn(httpd_req_t* req)
 {
-    if (!check_admin(req)) return 0;
+    if (!check_admin(req))
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "access denied");
     
     auto logfile = fopen("/lfs/access_logs", "rb");
     if (!logfile)
@@ -108,7 +118,8 @@ on_error:
 
 esp_err_t user_list_fn(httpd_req_t* req)
 {
-    if (!check_admin(req)) return 0;
+    if (!check_admin(req))
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "access denied");
     
     esp_err_t ret;
     auto& user_dict = user_manager.get_user_dict();
@@ -125,7 +136,8 @@ esp_err_t user_list_fn(httpd_req_t* req)
 
 esp_err_t add_user_fn(httpd_req_t* req)
 {
-    if (!check_admin(req)) return 0;
+    if (!check_admin(req))
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "access denied");
     
     std::string content;
     
@@ -141,7 +153,8 @@ esp_err_t add_user_fn(httpd_req_t* req)
 
 esp_err_t remove_user_fn(httpd_req_t* req)
 {
-    if (!check_admin(req)) return 0;
+    if (!check_admin(req))
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "access denied");
     
     std::string content;
     
@@ -160,7 +173,8 @@ esp_err_t remove_user_fn(httpd_req_t* req)
 
 esp_err_t check_user_fn(httpd_req_t* req)
 {
-    if (!check_admin(req)) return 0;
+    if (!check_admin(req))
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "access denied");
     
     std::string content;
     
