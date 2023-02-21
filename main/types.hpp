@@ -6,6 +6,7 @@
 #include <cstdint>
 
 using mac_address = std::uint64_t;
+using ipv4_address = std::uint32_t;
 using unix_timestamp = std::int64_t;
 
 std::string mac2str(mac_address mac)

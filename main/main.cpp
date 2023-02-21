@@ -90,23 +90,22 @@ void on_unlock_signal()
     else faliure_feedback();
 }
 
-constexpr auto LE_arr2mac(const uint8_t* mac_arr)
-{
-    uint8_t mac_buf[8]{};
-    std::copy(mac_arr, mac_arr+6, mac_buf);
-    return std::bit_cast<mac_address>(mac_buf);
-}
-
-constexpr auto BE_arr2mac(const uint8_t* mac_arr)
+constexpr auto arr2mac(const uint8_t* mac_arr)
 {
     uint8_t mac_buf[8]{};
     std::reverse_copy(mac_arr, mac_arr+6, mac_buf);
     return std::bit_cast<mac_address>(mac_buf);
 }
 
+void on_client_got_ip(void*, esp_event_base_t, int32_t, void* event_data)
+{
+    auto data = (ip_event_ap_staipassigned_t*)event_data;
+    online_clients[data->ip.addr] = arr2mac(data->mac);
+}
+
 void on_client_connect(void*, esp_event_base_t, int32_t, void* event_data)
 {
-    auto mac = BE_arr2mac(((wifi_event_ap_staconnected_t*)event_data)->mac);
+    auto mac = arr2mac(((wifi_event_ap_staconnected_t*)event_data)->mac);
     access_logger.add_log(mac, true);
     
     if (user_manager.check_user(mac))
@@ -124,8 +123,9 @@ void on_client_connect(void*, esp_event_base_t, int32_t, void* event_data)
 
 void on_client_disconnect(void*, esp_event_base_t, int32_t, void* event_data) 
 {
-    auto mac = BE_arr2mac(((wifi_event_ap_staconnected_t*)event_data)->mac);
+    auto mac = arr2mac(((wifi_event_ap_staconnected_t*)event_data)->mac);
     access_logger.add_log(mac, false);
+    std::erase_if(online_clients, [mac](const auto& pair){return pair.second == mac;});
     
     if (user_manager.check_user(mac))
     {
@@ -172,9 +172,7 @@ void app_main()
             log::info("Partition used/total: %zu/%zu\n", used, total);
     }
     
-    if(!user_manager.init("/lfs/user_list"))
-        {user_manager.load_defaults();}
-    
+    user_manager.init("/lfs/user_list");
     access_logger.init("/lfs/access_logs");
     
     /////////////////////////////////////////////
@@ -230,6 +228,7 @@ void app_main()
     TRY(esp_wifi_start());
     //TRY(esp_wifi_connect());
     
+    TRY(esp_event_handler_register(IP_EVENT, IP_EVENT_AP_STAIPASSIGNED, &on_client_got_ip, NULL));
     TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED, &on_client_connect, NULL));
     TRY(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED, &on_client_disconnect, NULL));
     

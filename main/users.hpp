@@ -1,25 +1,34 @@
 #pragma once
 
 #include <map>
+#include <set>
 #include <thread>
 #include <chrono>
 #include <cstdio>
 #include <string>
-#include <vector>
 #include <cstdint>
 #include <utility>
 #include <cassert>
 
 #include "log.hpp"
 #include "types.hpp"
+#include <esp_netif.h>
 
 using namespace std::literals;
+
+/*constexpr*/ std::set<mac_address> admin_list{
+    #include "admins.conf"
+};
+
+std::map<ipv4_address, mac_address> online_clients;
 
 class user_manager_t
 {
     bool list_updated = false;
     const char* filename = nullptr;
-    std::map<mac_address, std::string> user_dict;
+    std::map<mac_address, std::string> user_dict{
+        #include "users.conf"
+    };
     
     void userfile_update_loop()
     {
@@ -46,7 +55,6 @@ public:
     
     bool init(const char* fs_path)
     {
-        load_defaults();
         filename = fs_path;
         std::thread(&user_manager_t::userfile_update_loop, this).detach();
         FILE* userfile = fopen(filename, "r");
@@ -72,13 +80,6 @@ public:
     auto& get_user_dict()
     {
         return user_dict;
-    }
-    
-    void load_defaults()
-    {
-        // just in case filesystem gets currupted
-        user_dict[0xCAFEBABEB00B] = "Admin Phone";
-        user_dict[0x1EA7DEADBEEF] = "Admin Laptop";
     }
     
     void add_user(const mac_address mac, const std::string& username)
