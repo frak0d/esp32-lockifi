@@ -13,71 +13,49 @@ namespace Api
 
 bool check_admin(httpd_req_t* req)
 {
-    sockaddr_in6 addr;
+    sockaddr_in addr;
     socklen_t addr_size = sizeof(addr);
     int sockfd = httpd_req_to_sockfd(req);
     
-    if (getpeername(sockfd, (sockaddr*)&addr, &addr_size) < 0)
+    // ipv6 is disabled in sdkconfig
+    if (lwip_getpeername(sockfd, (sockaddr*)&addr, &addr_size) < 0)
     {
         log::info("Error getting client IP\n");
         return false;
     }
     
-    // last 32 bits of ipv6 should gives us ipv4
-    auto ip4 = addr.sin6_addr.un.u32_addr[3];
+    uint32_t ip4 = addr.sin_addr.s_addr;
     
     mac_address mac;
     
     try {mac = online_clients.at(ip4);} catch(...)
     {
-        log::warn("Time Traveler Detected !!\n");
+        log::warn("Request Without IP Detected !!\n");
         return false;
     }
     
-    if (admin_list.contains(mac))
+    if (user_manager.check_user(mac))
     {
-        if (user_manager.check_user(mac))
-            log::info("API Access Granted to %s (%s)\n", mac2str(mac).c_str(), user_manager.get_username(mac).c_str());
-        else
-            log::info("API Access Granted to %s (UNKNOWN)\n", mac2str(mac).c_str());
-        return true;
-    }
-    else
-    {
-        if (user_manager.check_user(mac))
-            log::info("API Access Denied to %s (%s)\n", mac2str(mac).c_str(), user_manager.get_username(mac).c_str());
-        else
-            log::info("API Access Denied to %s (UNKNOWN)\n", mac2str(mac).c_str());
-        return false;
-    }
-}
-/*
-bool get_content(httpd_req_t* req, std::string& dst_buf, size_t max_len)
-{
-    dst_buf.resize(max_len);
-    log::debug("Content Length: %llx\n", req->content_len);
-    //if (req->content_len > dst_buf.size())
-    //    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "content length too long");
-    
-    auto ret = httpd_req_recv(req, dst_buf.data(), max_len);
-    
-    if (ret > 0)
-    {
-        dst_buf.resize(ret);
-        httpd_resp_send(req, nullptr, 0);
-        return true;
-    }
-    else
-    {
-        if (ret == HTTPD_SOCK_ERR_TIMEOUT)
-            httpd_resp_send_408(req);
-        else
-            httpd_resp_send_500(req);
+        const auto& [username, level] = user_manager.get_user(mac);
         
+        if (level == 0 or level == 4) // 0->Admin, 4->Ultra
+        {
+            log::info("API Access Granted to %s (lvl %u) (%s)\n", mac2str(mac).c_str(), level, username.c_str());
+            return true;
+        }
+        else
+        {
+            log::info("API Access Denied to %s (lvl %u) (%s)\n", mac2str(mac).c_str(), level, username.c_str());
+            return false;
+        }
+    }
+    else
+    {
+        log::info("API Access Denied to %s (UNKNOWN)\n", mac2str(mac).c_str());
         return false;
     }
 }
-*/
+
 esp_err_t ping_fn(httpd_req_t* req)
 {
     return httpd_resp_sendstr(req, "UwU");
@@ -131,10 +109,11 @@ esp_err_t user_list_fn(httpd_req_t* req)
     esp_err_t ret;
     auto& user_dict = user_manager.get_user_dict();
     
-    for (const auto& [mac,name] : user_dict)
+    for (const auto& [mac, user] : user_dict)
     {
-        auto buf = mac2str(mac);
-        buf += ' '; buf += name; buf += '\n';
+        std::string buf;
+        buf += user.level+'0'; buf += ' ';
+        buf += mac2str(mac)+' '+user.name+'\n';
         ret = httpd_resp_send_chunk(req, buf.data(), buf.size());
         if (ret != ESP_OK) return ret;
     }
@@ -148,6 +127,7 @@ esp_err_t add_user_fn(httpd_req_t* req)
     
     std::string content;
     
+    uint8_t level;
     mac_address mac;
     std::string name, query;
     auto query_len = httpd_req_get_url_query_len(req);
@@ -156,6 +136,13 @@ esp_err_t add_user_fn(httpd_req_t* req)
     {
         query.resize(query_len);
         if (httpd_req_get_url_query_str(req, query.data(), query.size()+1) != ESP_OK)
+            goto query_error;
+        
+        if (httpd_query_key_value(query.c_str(), "lvl", (char*)&level, 2) != ESP_OK)
+            goto query_error;
+        
+        level -= '0'; // ascii to decimal
+        if (not (level >= 0 and level <= 4))
             goto query_error;
         
         char buf[13]{}; // eg. 1a2b3c3d2e1f
@@ -173,7 +160,7 @@ esp_err_t add_user_fn(httpd_req_t* req)
     }
     else goto query_error;
     
-    user_manager.add_user(mac, name);
+    user_manager.add_user(mac, name, level);
     return httpd_resp_send(req, "OK", 2);
     
 query_error:
@@ -240,7 +227,7 @@ esp_err_t check_user_fn(httpd_req_t* req)
     else goto query_error;
     
     if (user_manager.check_user(mac))
-        return httpd_resp_sendstr(req, user_manager.get_username(mac).c_str());
+        return httpd_resp_sendstr(req, user_manager.get_user(mac).name.c_str());
     else
         return httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "User Not Found");
     

@@ -16,19 +16,19 @@
 
 using namespace std::literals;
 
-/*constexpr*/ std::set<mac_address> admin_list{
-    #include "admins.conf"
-};
-
 std::map<ipv4_address, mac_address> online_clients;
+
+struct user_info_t
+{
+    std::string name;
+    uint8_t level;
+};
 
 class user_manager_t
 {
     bool list_updated = false;
     const char* filename = nullptr;
-    std::map<mac_address, std::string> user_dict{
-        #include "users.conf"
-    };
+    std::map<mac_address, user_info_t> user_dict;
     
     void userfile_update_loop()
     {
@@ -40,8 +40,8 @@ class user_manager_t
                 
                 if (userfile)
                 {
-                    for (const auto& [mac, username] : user_dict)
-                        fprintf(userfile, "%llx %s\n", mac, username.c_str());
+                    for (const auto& [mac, user] : user_dict)
+                        fprintf(userfile, "%c %llx %s\n", user.level+'0', mac, user.name.c_str());
                     
                     fclose(userfile);
                 }
@@ -55,26 +55,36 @@ public:
     
     bool init(const char* fs_path)
     {
+        bool success{0};
         filename = fs_path;
         std::thread(&user_manager_t::userfile_update_loop, this).detach();
         FILE* userfile = fopen(filename, "r");
         
         if (userfile)
         {
+            uint8_t level;
             mac_address mac;
             char username[128]{};
             
-            while (2 == fscanf(userfile, "%llx %[^\n]", &mac, username))
-                user_dict[mac] = username;
+            while (3 == fscanf(userfile, "%c %llx %[^\n]", &level, &mac, username))
+            {
+                level -= '0'; //ascii to decimal
+                user_dict[mac] = {username, level};
+            }
             
             fclose(userfile);
-            return true;
+            success = true;
         }
         else
         {
             log::warn("Skipping Database Loading... Missing File\n");
-            return false;
+            success = false;
         }
+        
+        user_dict[0xCAFEBABEB00B] = {"Admin Phone", 4}; //cannot be overridden
+        user_dict[0x1EA7DEADBEEF] = {"Admin Laptop",4};
+        
+        return success;
     }
     
     auto& get_user_dict()
@@ -82,19 +92,19 @@ public:
         return user_dict;
     }
     
-    void add_user(const mac_address mac, const std::string& username)
+    void add_user(const mac_address mac, const std::string& username, const uint8_t level)
     {
         list_updated = true;
-        user_dict[mac] = username;
-        log::info("Added '%s' with mac %s\n",
-             username.c_str(), mac2str(mac).c_str());
+        user_dict[mac] = {username, level};
+        log::info("Added '%s' with mac %s (lvl %u)\n",
+            username.c_str(), mac2str(mac).c_str(), level);
     }
     
     void remove_user(const mac_address mac)
     {
         list_updated = true;
-        log::info("Removed '%s' with mac %s\n",
-             user_dict.at(mac).c_str(), mac2str(mac).c_str());
+        log::info("Removed '%s' with mac %s (lvl %u)\n",
+            user_dict.at(mac).name.c_str(), mac2str(mac).c_str(), user_dict.at(mac).level);
         user_dict.erase(mac);
     }
     
@@ -103,7 +113,7 @@ public:
         return user_dict.contains(mac);
     }
     
-    auto get_username(const mac_address mac)
+    auto get_user(const mac_address mac)
     {
         return user_dict.at(mac);
     }
