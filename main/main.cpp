@@ -10,7 +10,7 @@
 
 #include "log.hpp"
 #include "users.hpp"
-#include "api.hpp"
+#include "http_api.hpp"
 
 #include <esp_wifi.h>
 #include <esp_wifi_types.h>
@@ -25,13 +25,12 @@
 
 using namespace std::literals;
 #define TRY(...) ESP_ERROR_CHECK(__VA_ARGS__)
-std::atomic<int> keep_unlocked{0}, trust_agents{0};
+std::atomic<int> keep_unlocked{0}, trust_level{0};
 
-constexpr auto TOUCH_THRESHOLD = 1000;
 constexpr auto TOUCH_PIN     = TOUCH_PAD_NUM9;
 constexpr auto RED_LED_PIN   = GPIO_NUM_25;
 constexpr auto GREEN_LED_PIN = GPIO_NUM_26;
-constexpr auto SOLENOID_PIN  = GPIO_NUM_2;//GPIO_NUM_17;
+constexpr auto SOLENOID_PIN  = GPIO_NUM_2;
 
 void success_feedback()
 {
@@ -79,10 +78,9 @@ void door_wardern(gpio_num_t pin)
     }
 }
 
-void on_unlock_signal()
+void unlock_signal()
 {
-    log::info("TOUCH RECIEVED\n");
-    if (trust_agents > 0)
+    if (trust_level >= 3)
     {
         keep_unlocked = 5000;
         success_feedback();
@@ -110,14 +108,14 @@ void on_client_connect(void*, esp_event_base_t, int32_t, void* event_data)
     
     if (user_manager.check_user(mac))
     {
-        ++trust_agents;
-        log::info("Trusted Agent %s (%s) Connected, Total: %d\n",
-             mac2str(mac).c_str(), user_manager.get_username(mac).c_str(), trust_agents.load());
+        const auto& user = user_manager.get_user(mac);
+        trust_level += user.level;
+        log::info("Trusted Agent %s (lvl %u) (%s) Connected, Trust = %d\n",
+            mac2str(mac).c_str(), user.level, user.name.c_str(), trust_level.load());
     }
     else
     {
-        log::warn("Unknown Agent %s Connected, Ignoring...\n",
-             mac2str(mac).c_str(), trust_agents.load());
+        log::warn("Unknown Agent %s Connected, Ignoring...\n", mac2str(mac).c_str());
     }
 }
 
@@ -129,14 +127,14 @@ void on_client_disconnect(void*, esp_event_base_t, int32_t, void* event_data)
     
     if (user_manager.check_user(mac))
     {
-        --trust_agents;
-        log::info("Trusted Agent %s (%s) Disconnected, Total: %d\n",
-             mac2str(mac).c_str(), user_manager.get_username(mac).c_str(), trust_agents.load());
+        const auto& user = user_manager.get_user(mac);
+        trust_level -= user.level;
+        log::info("Trusted Agent %s (lvl %u) (%s) Disconnected, Trust = %d\n",
+            mac2str(mac).c_str(), user.level, user.name.c_str(), trust_level.load());
     }
     else
     {
-        log::warn("Unknown Agent %s Disconnected, Ignoring...\n",
-             mac2str(mac).c_str(), trust_agents.load());
+        log::warn("Unknown Agent %s Disconnected, Ignoring...\n", mac2str(mac).c_str());
     }
 }
 
@@ -252,15 +250,29 @@ void app_main()
     TRY(touch_pad_config(TOUCH_PIN, 0));
     TRY(touch_pad_filter_start(10/*ms*/));
     
-    uint16_t touch_value;
+    uint16_t touch_value{1500};
+    int16_t touch_threshold{1000};
     
     while(1)
     {
         std::this_thread::sleep_for(200ms);
-        touch_pad_read_filtered(TOUCH_PIN, &touch_value);
-        log::debug("Touch Value: %4d\n", touch_value);
         
-        if (touch_value < TOUCH_THRESHOLD)
-            on_unlock_signal();
+        if (touch_pad_read_filtered(TOUCH_PIN, &touch_value) != ESP_OK)
+            log::warn("Error reading touchpad !!\n");
+        
+        log::debug("Touch Value: %5u, Touch Threshold: %5d\n",
+                    touch_value,      touch_threshold);
+        
+        auto absolute_difference = touch_value - touch_threshold;
+        if (absolute_difference < 0) absolute_difference *= -1; //math.h log() conflicts with log::
+        
+        if (absolute_difference > 1000)
+            touch_threshold = (touch_value + touch_threshold)/2;
+        
+        if (touch_value < touch_threshold)
+        {
+            unlock_signal();
+            log::info("Touch Recieved!\n");
+        }
     }
 }

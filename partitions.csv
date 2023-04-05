@@ -1,7 +1,8 @@
 # esp32 partition table for 4MiB flash
 # Name,   Type, SubType,  Offset,  Size, Flags
+# 0x0000 - 0x9000 are reserved for partition table
 
 nvs,      data, nvs,      0x9000,  24K,
 phy_init, data, phy,            ,  4K,
-factory,  app,  factory,        ,  1800K,
-littlefs, data, spiffs,         ,  2M,
+factory,  app,  factory,        ,  1024K,
+littlefs, data, spiffs,         ,  2560K,

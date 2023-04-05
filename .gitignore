@@ -1,7 +1,5 @@
 build/
 .vscode/
-sdkconfig
-main/test.cpp
 sdkconfig.old
 dependencies.lock
 managed_components/
