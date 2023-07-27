@@ -6,12 +6,13 @@
 #include <cstring>
 #include <algorithm>
 
-#define LOG_LEVEL log::level::info
+#define LOG_LEVEL log::level::debug
 
 #include "log.hpp"
 #include "users.hpp"
 #include "http_api.hpp"
 
+#include <rtc_wdt.h>
 #include <esp_wifi.h>
 #include <esp_wifi_types.h>
 #include <driver/gpio.h>
@@ -31,6 +32,7 @@ constexpr int level_to_trust[] = {0, 2, 3, 6, 6};
 constexpr auto TOUCH_PIN     = TOUCH_PAD_NUM9;
 constexpr auto RED_LED_PIN   = GPIO_NUM_25;
 constexpr auto GREEN_LED_PIN = GPIO_NUM_26;
+constexpr auto SWITCH_PIN    = GPIO_NUM_27;
 constexpr auto SOLENOID_PIN  = GPIO_NUM_2;
 
 void success_feedback()
@@ -79,14 +81,14 @@ void door_wardern(gpio_num_t pin)
     }
 }
 
-void unlock_signal()
+void unlock_signal(void* args=nullptr)
 {
     if (trust_level >= 6)
     {
         keep_unlocked = 5000;
-        success_feedback();
+        std::thread(success_feedback).detach();
     }
-    else faliure_feedback();
+    else std::thread(faliure_feedback).detach();
 }
 
 constexpr auto arr2mac(const uint8_t* mac_arr)
@@ -190,7 +192,7 @@ void app_main()
     
     wifi_config_t wifi_ap_cfg
     {.ap{
-        .ssid = "Robotics Lab",
+        .ssid = "Robotics Lab (Lockifi)",
         .password = "12345678",
         .authmode = WIFI_AUTH_WPA2_PSK,
         .max_connection = ESP_WIFI_MAX_CONN_NUM,
@@ -245,13 +247,23 @@ void app_main()
     
     /////////////////////////////////////////////
     
-    TRY(touch_pad_init());
-    TRY(touch_pad_set_voltage(TOUCH_HVOLT_2V7, TOUCH_LVOLT_0V7, TOUCH_HVOLT_ATTEN_1V5));
-    TRY(touch_pad_config(TOUCH_PIN, 0));
-    TRY(touch_pad_filter_start(10/*ms*/));
+    TRY(gpio_set_direction(SWITCH_PIN, GPIO_MODE_INPUT));
+    TRY(gpio_pullup_en(SWITCH_PIN));
+    TRY(gpio_set_intr_type(SWITCH_PIN, GPIO_INTR_NEGEDGE));
     
-    uint16_t touch_value{1500};
-    int16_t touch_threshold{1000};
+    TRY(gpio_install_isr_service(0));
+    TRY(gpio_isr_handler_add(SWITCH_PIN, unlock_signal, nullptr));
+    
+    TRY(touch_pad_init());
+    TRY(touch_pad_set_voltage(TOUCH_HVOLT_2V4, TOUCH_LVOLT_0V8, TOUCH_HVOLT_ATTEN_1V5));
+    TRY(touch_pad_config(TOUCH_PIN, 0));
+    TRY(touch_pad_filter_start(50/*ms*/));
+    
+    uint16_t touch_value{};
+    int16_t touch_threshold{};
+    
+    // let the touchpad stabalize
+    std::this_thread::sleep_for(750ms);
     
     while(1)
     {
@@ -260,19 +272,19 @@ void app_main()
         if (touch_pad_read_filtered(TOUCH_PIN, &touch_value) != ESP_OK)
             log::warn("Error reading touchpad !!\n");
         
-        log::debug("Touch Value: %5u, Touch Threshold: %5d\n",
-                    touch_value,      touch_threshold);
-        
-        auto absolute_difference = touch_value - touch_threshold;
-        if (absolute_difference < 0) absolute_difference *= -1; //math.h log() conflicts with log::
-        
-        if (absolute_difference > 1000)
-            touch_threshold = (touch_value + touch_threshold)/2;
+        log::debug("Touch Threshold: %5d, Touch Value: %5u\n",
+                    touch_threshold,      touch_value);
         
         if (touch_value < touch_threshold)
         {
             unlock_signal();
             log::info("Touch Recieved!\n");
         }
+        
+        auto abs_diff = touch_threshold - touch_value;
+        if (abs_diff < 0) abs_diff *= -1;
+        
+        if (abs_diff > 0.25f * touch_value)
+            touch_threshold = 0.90f * touch_value;
     }
 }
