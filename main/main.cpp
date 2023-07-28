@@ -29,11 +29,15 @@ using namespace std::literals;
 std::atomic<int> keep_unlocked{0}, trust_level{0};
 constexpr int level_to_trust[] = {0, 2, 3, 6, 6};
 
-constexpr auto TOUCH_PIN     = TOUCH_PAD_NUM9;
+constexpr auto INBUILT_LED   = GPIO_NUM_2;
+constexpr auto TOUCH_PIN     = TOUCH_PAD_NUM9;//GPIO 32
+constexpr auto RELAY_PIN     = GPIO_NUM_33;
 constexpr auto RED_LED_PIN   = GPIO_NUM_25;
 constexpr auto GREEN_LED_PIN = GPIO_NUM_26;
 constexpr auto SWITCH_PIN    = GPIO_NUM_27;
-constexpr auto SOLENOID_PIN  = GPIO_NUM_2;
+
+constexpr auto RELAY_ON  = 0;
+constexpr auto RELAY_OFF = 1;
 
 void success_feedback()
 {
@@ -61,21 +65,21 @@ void faliure_feedback()
     gpio_set_level(RED_LED_PIN, 0);
 }
 
-void door_wardern(gpio_num_t pin)
+void door_wardern()
 {
-    gpio_set_direction(pin, GPIO_MODE_OUTPUT);
-    
     while(1)
     {
         if (keep_unlocked > 0)
         {
-            gpio_set_level(pin, 1);
+            TRY(gpio_set_level(INBUILT_LED, 1));
+            TRY(gpio_set_level(RELAY_PIN, RELAY_ON));
             std::this_thread::sleep_for(100ms);
             keep_unlocked -= 100;
         }
         else
         {
-            gpio_set_level(pin, 0);
+            TRY(gpio_set_level(INBUILT_LED, 0));
+            TRY(gpio_set_level(RELAY_PIN, RELAY_OFF));
             std::this_thread::sleep_for(100ms);
         }
     }
@@ -83,12 +87,12 @@ void door_wardern(gpio_num_t pin)
 
 void unlock_signal(void* args=nullptr)
 {
-    if (trust_level >= 6)
+    if (true) // FOR Now (trust_level >= 6)
     {
         keep_unlocked = 5000;
-        std::thread(success_feedback).detach();
+        success_feedback();
     }
-    else std::thread(faliure_feedback).detach();
+    else faliure_feedback();
 }
 
 constexpr auto arr2mac(const uint8_t* mac_arr)
@@ -144,11 +148,13 @@ void on_client_disconnect(void*, esp_event_base_t, int32_t, void* event_data)
 extern "C"
 void app_main()
 {
-    TRY(esp_event_loop_create_default());
-    std::thread(door_wardern, SOLENOID_PIN).detach();
-    
+    TRY(gpio_set_direction(RELAY_PIN, GPIO_MODE_OUTPUT));
+    TRY(gpio_set_direction(INBUILT_LED, GPIO_MODE_OUTPUT));
     TRY(gpio_set_direction(RED_LED_PIN, GPIO_MODE_OUTPUT));
     TRY(gpio_set_direction(GREEN_LED_PIN, GPIO_MODE_OUTPUT));
+    
+    TRY(esp_event_loop_create_default());
+    std::thread(door_wardern).detach();
     
     /////////////////////////////////////////////
     
@@ -248,26 +254,28 @@ void app_main()
     /////////////////////////////////////////////
     
     TRY(gpio_set_direction(SWITCH_PIN, GPIO_MODE_INPUT));
-    TRY(gpio_pullup_en(SWITCH_PIN));
-    TRY(gpio_set_intr_type(SWITCH_PIN, GPIO_INTR_NEGEDGE));
-    
-    TRY(gpio_install_isr_service(0));
-    TRY(gpio_isr_handler_add(SWITCH_PIN, unlock_signal, nullptr));
+    TRY(gpio_pulldown_en(SWITCH_PIN));
     
     TRY(touch_pad_init());
     TRY(touch_pad_set_voltage(TOUCH_HVOLT_2V4, TOUCH_LVOLT_0V8, TOUCH_HVOLT_ATTEN_1V5));
     TRY(touch_pad_config(TOUCH_PIN, 0));
-    TRY(touch_pad_filter_start(50/*ms*/));
+    TRY(touch_pad_filter_start(25/*ms*/));
     
     uint16_t touch_value{};
     int16_t touch_threshold{};
     
     // let the touchpad stabalize
-    std::this_thread::sleep_for(750ms);
+    std::this_thread::sleep_for(1s);
     
     while(1)
     {
         std::this_thread::sleep_for(200ms);
+        
+        if (gpio_get_level(SWITCH_PIN))
+        {
+            unlock_signal();
+            continue;
+        }
         
         if (touch_pad_read_filtered(TOUCH_PIN, &touch_value) != ESP_OK)
             log::warn("Error reading touchpad !!\n");
@@ -285,6 +293,6 @@ void app_main()
         if (abs_diff < 0) abs_diff *= -1;
         
         if (abs_diff > 0.25f * touch_value)
-            touch_threshold = 0.90f * touch_value;
+            touch_threshold = 0.85f * touch_value;
     }
 }
