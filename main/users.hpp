@@ -2,6 +2,7 @@
 
 #include <map>
 #include <set>
+#include <mutex>
 #include <thread>
 #include <chrono>
 #include <cstdio>
@@ -9,6 +10,8 @@
 #include <cstdint>
 #include <utility>
 #include <cassert>
+#include <fstream>
+#include <filesystem>
 
 #include "log.hpp"
 #include "types.hpp"
@@ -26,6 +29,7 @@ struct user_info_t
 
 class user_manager_t
 {
+    std::mutex mtx;
     bool list_updated = false;
     const char* filename = nullptr;
     std::map<mac_address, user_info_t> user_dict;
@@ -34,31 +38,45 @@ class user_manager_t
     {
         while(1)
         {
+            mtx.lock();
             if (list_updated)
             {
-                FILE* userfile = fopen(filename, "w");
+                bool err = true;
+                FILE* userfile = fopen("/lfs/user_list", "w");
                 
                 if (userfile)
                 {
                     for (const auto& [mac, user] : user_dict)
-                        fprintf(userfile, "%c %llx %s\n", user.level+'0', mac, user.name.c_str());
+                        fprintf(userfile, "%c %012llx %s\n", user.level+'0', mac, user.name.c_str());
                     
-                    fclose(userfile);
+                    err = fclose(userfile);
                 }
-                else log::error("Unable to Open %s\n", filename);
+                
+                if (err)
+                    log::error("Error saving user_list, No changes made!\n");
+                else
+                {
+                    list_updated = false;
+                    log::info("Saved user_list to flash!\n");
+                }
             }
-            std::this_thread::sleep_for(750ms);
+            mtx.unlock();
+            std::this_thread::sleep_for(1s);
         }
     }
     
 public:
     
-    bool init(const char* fs_path)
+    void init()
     {
-        bool success{0};
-        filename = fs_path;
-        std::thread(&user_manager_t::userfile_update_loop, this).detach();
-        FILE* userfile = fopen(filename, "r");
+        if (LOG_LEVEL == log::level::debug)
+        {
+            std::ifstream f{"/lfs/user_list"};
+            std::string data{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+            log::info("---\n%s---\n", data.c_str());
+        }
+        
+        FILE* userfile = fopen("/lfs/user_list", "r");
         
         if (userfile)
         {
@@ -66,25 +84,38 @@ public:
             mac_address mac;
             char username[128]{};
             
-            while (3 == fscanf(userfile, "%c %llx %[^\n]", &level, &mac, username))
-            {
-                level -= '0'; //ascii to decimal
-                user_dict[mac] = {username, level};
+            while (3 == fscanf(userfile, "%c %llx %[^\n] ", &level, &mac, username))
+            {                                        // ^ this space at end of format string consumes newline
+                level -= '0'; // ascii to decimal
+                log::info("loaded:_%d_%012llx_%s_\n", level, mac, username);
+                
+                // discarding currupt entries
+                if (level >= 0 and level <= 4)
+                    user_dict[mac] = {username, level};
             }
             
             fclose(userfile);
-            success = true;
         }
         else
         {
             log::warn("Skipping Database Loading... Missing File\n");
-            success = false;
         }
         
-        user_dict[0xCAFEBABEB00B] = {"Admin Phone", 4}; //cannot be overridden
-        user_dict[0x1EA7DEADBEEF] = {"Admin Laptop",4};
+        try // checking hardcoded default users
+        {
+            if (not(user_dict.at(0xAABBCCDDEEFF).level == 4
+                and user_dict.at(0x1EA7DEADBEEF).level == 4)) throw 1;
+        }
+        catch (...)
+        {
+            log::warn("Had to rebuild default user record!\n");
+            user_dict[0xAABBCCDDEEFF] = {"Lab PC 1", 4};
+            user_dict[0x1EA7DEADBEEF] = {"Admin Laptop", 4};
+            list_updated = true;
+        }
         
-        return success;
+        // start save loop after loading, else it may erase contents
+        std::thread(&user_manager_t::userfile_update_loop, this).detach();
     }
     
     auto& get_user_dict()
@@ -94,18 +125,24 @@ public:
     
     void add_user(const mac_address mac, const std::string& username, const uint8_t level)
     {
-        list_updated = true;
+        mtx.lock();
         user_dict[mac] = {username, level};
+        list_updated = true;
+        mtx.unlock();
+        
         log::info("Added '%s' with mac %s (lvl %u)\n",
             username.c_str(), mac2str(mac).c_str(), level);
     }
     
     void remove_user(const mac_address mac)
     {
-        list_updated = true;
         log::info("Removed '%s' with mac %s (lvl %u)\n",
             user_dict.at(mac).name.c_str(), mac2str(mac).c_str(), user_dict.at(mac).level);
+        
+        mtx.lock();
         user_dict.erase(mac);
+        list_updated = true;
+        mtx.unlock();
     }
     
     bool check_user(const mac_address mac)
@@ -128,9 +165,9 @@ class access_logger_t
     
 public:
     
-    bool init(const char* fs_path)
+    bool init()
     {
-        logfile = std::fopen(fs_path, "ab+");
+        logfile = std::fopen("/lfs/access_logs", "ab+");
         return logfile;
     }
     

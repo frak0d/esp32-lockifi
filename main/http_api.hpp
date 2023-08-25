@@ -8,6 +8,8 @@
 #include <lwip/inet.h>
 #include <lwip/sockets.h>
 
+void unlock_signal(); // defined in main.cpp
+
 namespace Api
 {
 
@@ -235,6 +237,17 @@ query_error:
     return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid query");
 }
 
+esp_err_t unlock_fn(httpd_req_t* req)
+{    
+    if (check_admin(req))
+    {
+        unlock_signal();
+        return httpd_resp_send(req, "OK", 2);
+    }
+    else
+        return httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "access denied");
+}
+
 /////////////////////////////////////////////
 
 httpd_uri_t ping
@@ -272,6 +285,12 @@ httpd_uri_t check_user
     .uri     = "/check_user",
     .method  = HTTP_GET,
     .handler = check_user_fn
+};
+httpd_uri_t unlock
+{
+    .uri     = "/unlock",
+    .method  = HTTP_GET,
+    .handler = unlock_fn
 };
 
 }

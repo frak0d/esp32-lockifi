@@ -6,7 +6,7 @@
 #include <cstring>
 #include <algorithm>
 
-#define LOG_LEVEL log::level::debug
+#define LOG_LEVEL log::level::info
 
 #include "log.hpp"
 #include "users.hpp"
@@ -24,6 +24,7 @@
 #include <esp_flash.h>
 #include <esp_littlefs.h>
 
+bool tcpip_ready = false;
 using namespace std::literals;
 #define TRY(...) ESP_ERROR_CHECK(__VA_ARGS__)
 std::atomic<int> keep_unlocked{0}, trust_level{0};
@@ -85,9 +86,9 @@ void door_wardern()
     }
 }
 
-void unlock_signal(void* args=nullptr)
+void unlock_signal()
 {
-    if (true) // FOR Now (trust_level >= 6)
+    if (trust_level >= 6)
     {
         keep_unlocked = 5000;
         success_feedback();
@@ -110,7 +111,8 @@ void on_client_got_ip(void*, esp_event_base_t, int32_t, void* event_data)
 
 void on_client_connect(void*, esp_event_base_t, int32_t, void* event_data)
 {
-    auto mac = arr2mac(((wifi_event_ap_staconnected_t*)event_data)->mac);
+    auto ev = (wifi_event_ap_staconnected_t*)event_data;
+    auto mac = arr2mac(ev->mac);
     access_logger.add_log(mac, true);
     
     if (user_manager.check_user(mac))
@@ -119,10 +121,13 @@ void on_client_connect(void*, esp_event_base_t, int32_t, void* event_data)
         trust_level += level_to_trust[user.level];
         log::info("Trusted Agent %s (lvl %u) (%s) Connected, Trust = %d\n",
             mac2str(mac).c_str(), user.level, user.name.c_str(), trust_level.load());
+        
+        if (!tcpip_ready) esp_wifi_deauth_sta(ev->aid); //kick if wifi not ready
     }
     else
     {
-        log::warn("Unknown Agent %s Connected, Ignoring...\n", mac2str(mac).c_str());
+        log::info("Unknown Agent %s Connected, Kicking...\n", mac2str(mac).c_str());
+        esp_wifi_deauth_sta(ev->aid);
     }
 }
 
@@ -141,7 +146,7 @@ void on_client_disconnect(void*, esp_event_base_t, int32_t, void* event_data)
     }
     else
     {
-        log::warn("Unknown Agent %s Disconnected, Ignoring...\n", mac2str(mac).c_str());
+        log::warn("Unknown Agent %s Disconnected.\n", mac2str(mac).c_str());
     }
 }
 
@@ -178,8 +183,8 @@ void app_main()
             log::info("Partition used/total: %zu/%zu\n", used, total);
     }
     
-    user_manager.init("/lfs/user_list");
-    access_logger.init("/lfs/access_logs");
+    user_manager.init();
+    access_logger.init();
     
     /////////////////////////////////////////////
     
@@ -250,6 +255,7 @@ void app_main()
     TRY(httpd_register_uri_handler(http_server, &Api::add_user));
     TRY(httpd_register_uri_handler(http_server, &Api::remove_user));
     TRY(httpd_register_uri_handler(http_server, &Api::check_user));
+    TRY(httpd_register_uri_handler(http_server, &Api::unlock));
     
     /////////////////////////////////////////////
     
@@ -264,8 +270,9 @@ void app_main()
     uint16_t touch_value{};
     int16_t touch_threshold{};
     
-    // let the touchpad stabalize
-    std::this_thread::sleep_for(1s);
+    // let the touch and tcp/ip stabalize
+    std::this_thread::sleep_for(5s);
+    tcpip_ready = true;
     
     while(1)
     {
@@ -293,6 +300,6 @@ void app_main()
         if (abs_diff < 0) abs_diff *= -1;
         
         if (abs_diff > 0.25f * touch_value)
-            touch_threshold = 0.85f * touch_value;
+            touch_threshold = 0.80f * touch_value;
     }
 }
